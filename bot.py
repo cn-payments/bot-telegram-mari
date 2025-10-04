@@ -1194,7 +1194,7 @@ async def add_user_to_vip_groups(bot, user_id, plan_id):
                             chat_id=user_id,
                             text=f"⬇ ESTOU PELADINHA TE ESPERANDO 🙈\n\n"
                                  f"😈 Clique em \" VER CANAL \" pra gente começar a brincar 🔥\n\n"
-                                 f"💎 VIP DA EDUARDA 🍑🔥\n\n"
+                                 f"💎 VIP DA SOY ÁVILA 🍑🔥\n\n"
                                  f"📝 O link expira em {plan['duration_days']} dias (duração do seu plano).\n\n"
                                  f"⚠ Este link é único e só pode ser usado uma vez.\n\n"
                                  f"**Link:** {invite_link.invite_link}"
@@ -1210,7 +1210,7 @@ async def add_user_to_vip_groups(bot, user_id, plan_id):
                                 chat_id=user_id,
                                 text=f"⬇ ESTOU PELADINHA TE ESPERANDO 🙈\n\n"
                                      f"😈 Clique em \" VER CANAL \" pra gente começar a brincar 🔥\n\n"
-                                     f"💎 VIP DA EDUARDA 🍑🔥\n\n"
+                                     f"💎 VIP DA SOY ÁVILA 🍑🔥\n\n"
                                      f"📝 O link expira em {plan['duration_days']} dias (duração do seu plano).\n\n"
                                      f"⚠ Este link é único e só pode ser usado uma vez.\n\n"
                                      f"**Link:** {invite_link}"
@@ -2103,7 +2103,6 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("💎 Planos VIP", callback_data="admin_vip_plans")],
         [InlineKeyboardButton("📝 Mensagens", callback_data="admin_messages")],
         [InlineKeyboardButton("⏰ Agendar Mensagens", callback_data="admin_schedule_messages")],
-        [InlineKeyboardButton("🚨 Pagamentos Suspeitos", callback_data="admin_suspicious_payments")],
         [InlineKeyboardButton("🔄 Manutenção", callback_data="admin_maintenance")],
         [InlineKeyboardButton("👤 Gerenciar Admins", callback_data="admin_manage_admins")],
         [InlineKeyboardButton("⚒️ Suporte", url=config.get('support_admin', 'https://t.me/suporte'))]  # Botão de suporte
@@ -2871,334 +2870,6 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
             "Exemplo: 123456789, 987654321, 555666777"
         )
         return
-    
-    # Handler para relatório de pagamentos suspeitos
-    if query.data == "admin_suspicious_payments":
-        await query.answer("🔍 Analisando pagamentos...", show_alert=False)
-        
-        db = Database()
-        try:
-            db.connect()
-            
-            # Detectar múltiplos pagamentos para o mesmo plano pelo mesmo usuário
-            duplicate_payments = db.execute_fetch_all("""
-                SELECT 
-                    user_id,
-                    plan_id,
-                    COUNT(*) as payment_count,
-                    SUM(amount) as total_amount,
-                    GROUP_CONCAT(DISTINCT status) as statuses,
-                    MIN(created_at) as first_payment,
-                    MAX(created_at) as last_payment
-                FROM payments
-                WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-                GROUP BY user_id, plan_id
-                HAVING COUNT(*) > 1
-                ORDER BY payment_count DESC
-                LIMIT 20
-            """)
-            
-            # Detectar múltiplos pagamentos pendentes do mesmo usuário
-            pending_payments = db.execute_fetch_all("""
-                SELECT 
-                    user_id,
-                    COUNT(*) as pending_count,
-                    SUM(amount) as total_pending,
-                    MIN(created_at) as first_pending,
-                    MAX(created_at) as last_pending
-                FROM payments
-                WHERE status = 'pending' AND created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-                GROUP BY user_id
-                HAVING COUNT(*) > 2
-                ORDER BY pending_count DESC
-                LIMIT 20
-            """)
-            
-            # Detectar pagamentos aprovados muito rápidos (possível fraude)
-            fast_payments = db.execute_fetch_all("""
-                SELECT 
-                    user_id,
-                    payment_id,
-                    amount,
-                    status,
-                    created_at,
-                    updated_at,
-                    TIMESTAMPDIFF(SECOND, created_at, updated_at) as seconds_to_approve
-                FROM payments
-                WHERE status = 'approved' 
-                AND created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-                AND TIMESTAMPDIFF(SECOND, created_at, updated_at) < 10
-                ORDER BY seconds_to_approve ASC
-                LIMIT 20
-            """)
-            
-        except Exception as e:
-            logger.error(f"Erro ao buscar pagamentos suspeitos: {e}")
-            await query.answer("❌ Erro ao buscar pagamentos suspeitos", show_alert=True)
-            return
-        finally:
-            db.close()
-        
-        # Montar mensagem do relatório
-        report_text = "🚨 **Relatório de Pagamentos Suspeitos**\n\n"
-        
-        # Seção 1: Múltiplos pagamentos para o mesmo plano
-        if duplicate_payments:
-            report_text += "📊 **Múltiplos Pagamentos (mesmo plano):**\n"
-            for payment in duplicate_payments[:10]:
-                user_id = payment['user_id']
-                plan_id = payment['plan_id']
-                count = payment['payment_count']
-                total = payment['total_amount']
-                statuses = payment['statuses']
-                
-                # Buscar informações do usuário
-                db2 = Database()
-                try:
-                    db2.connect()
-                    user_info = db2.execute_fetch_one(
-                        "SELECT username, first_name FROM users WHERE id = %s",
-                        (user_id,)
-                    )
-                    plan_info = db2.execute_fetch_one(
-                        "SELECT name, price FROM vip_plans WHERE id = %s",
-                        (plan_id,)
-                    )
-                finally:
-                    db2.close()
-                
-                username = f"@{user_info['username']}" if user_info and user_info.get('username') else "Sem username"
-                user_name = user_info['first_name'] if user_info else "Desconhecido"
-                plan_name = plan_info['name'] if plan_info else f"Plano {plan_id}"
-                
-                report_text += f"\n👤 {user_name} ({username})\n"
-                report_text += f"   ID: `{user_id}`\n"
-                report_text += f"   Plano: {plan_name}\n"
-                report_text += f"   Pagamentos: {count}x\n"
-                report_text += f"   Total: R$ {total:.2f}\n"
-                report_text += f"   Status: {statuses}\n"
-        else:
-            report_text += "✅ Nenhum pagamento duplicado encontrado\n"
-        
-        report_text += "\n"
-        
-        # Seção 2: Múltiplos pagamentos pendentes
-        if pending_payments:
-            report_text += "⏳ **Múltiplos Pagamentos Pendentes:**\n"
-            for payment in pending_payments[:10]:
-                user_id = payment['user_id']
-                count = payment['pending_count']
-                total = payment['total_pending']
-                
-                # Buscar informações do usuário
-                db2 = Database()
-                try:
-                    db2.connect()
-                    user_info = db2.execute_fetch_one(
-                        "SELECT username, first_name FROM users WHERE id = %s",
-                        (user_id,)
-                    )
-                finally:
-                    db2.close()
-                
-                username = f"@{user_info['username']}" if user_info and user_info.get('username') else "Sem username"
-                user_name = user_info['first_name'] if user_info else "Desconhecido"
-                
-                report_text += f"\n👤 {user_name} ({username})\n"
-                report_text += f"   ID: `{user_id}`\n"
-                report_text += f"   Pendentes: {count}x\n"
-                report_text += f"   Total: R$ {total:.2f}\n"
-        else:
-            report_text += "✅ Nenhum pagamento pendente suspeito\n"
-        
-        report_text += "\n"
-        
-        # Seção 3: Pagamentos aprovados muito rápido
-        if fast_payments:
-            report_text += "⚡ **Aprovações Suspeitas (muito rápidas):**\n"
-            for payment in fast_payments[:10]:
-                user_id = payment['user_id']
-                payment_id = payment['payment_id']
-                amount = payment['amount']
-                seconds = payment['seconds_to_approve']
-                
-                # Buscar informações do usuário
-                db2 = Database()
-                try:
-                    db2.connect()
-                    user_info = db2.execute_fetch_one(
-                        "SELECT username, first_name FROM users WHERE id = %s",
-                        (user_id,)
-                    )
-                finally:
-                    db2.close()
-                
-                username = f"@{user_info['username']}" if user_info and user_info.get('username') else "Sem username"
-                user_name = user_info['first_name'] if user_info else "Desconhecido"
-                
-                report_text += f"\n👤 {user_name} ({username})\n"
-                report_text += f"   ID: `{user_id}`\n"
-                report_text += f"   Pagamento: `{payment_id}`\n"
-                report_text += f"   Valor: R$ {amount:.2f}\n"
-                report_text += f"   Aprovado em: {seconds}s ⚠️\n"
-        else:
-            report_text += "✅ Nenhuma aprovação suspeita encontrada\n"
-        
-        report_text += "\n\n📅 Período analisado: Últimos 30 dias\n"
-        report_text += "⚠️ Este relatório identifica padrões suspeitos que podem indicar problemas ou fraudes."
-        
-        keyboard = [
-            [InlineKeyboardButton("📊 Gerar Excel Completo", callback_data="admin_generate_excel_report")],
-            [InlineKeyboardButton("⬅️ Voltar", callback_data="admin_back")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.message.edit_text(
-            report_text,
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-        return
-    
-    # Handler para gerar relatório Excel completo
-    if query.data == "admin_generate_excel_report":
-        await query.answer("📊 Gerando relatório Excel...", show_alert=False)
-        
-        db = Database()
-        try:
-            db.connect()
-            
-            # Buscar todos os usuários com seus dados de pagamento
-            users_data = db.execute_fetch_all("""
-                SELECT 
-                    u.id as user_id,
-                    u.username,
-                    u.first_name,
-                    u.last_name,
-                    u.joined_date as user_created,
-                    u.is_vip,
-                    COUNT(p.payment_id) as total_payments,
-                    COUNT(CASE WHEN p.status = 'approved' THEN 1 END) as approved_payments,
-                    COUNT(CASE WHEN p.status = 'pending' THEN 1 END) as pending_payments,
-                    COUNT(CASE WHEN p.status = 'rejected' THEN 1 END) as rejected_payments,
-                    SUM(CASE WHEN p.status = 'approved' THEN p.amount ELSE 0 END) as total_approved_amount,
-                    SUM(CASE WHEN p.status = 'pending' THEN p.amount ELSE 0 END) as total_pending_amount,
-                    GROUP_CONCAT(DISTINCT vp.name ORDER BY p.created_at DESC) as purchased_plans,
-                    GROUP_CONCAT(DISTINCT p.status ORDER BY p.created_at DESC) as payment_statuses,
-                    MIN(p.created_at) as first_payment_date,
-                    MAX(p.created_at) as last_payment_date
-                FROM users u
-                LEFT JOIN payments p ON u.id = p.user_id
-                LEFT JOIN vip_plans vp ON p.plan_id = vp.id
-                GROUP BY u.id, u.username, u.first_name, u.last_name, u.joined_date, u.is_vip
-                ORDER BY u.joined_date DESC
-            """)
-            
-        except Exception as e:
-            logger.error(f"Erro ao buscar dados para Excel: {e}")
-            await query.answer("❌ Erro ao gerar relatório", show_alert=True)
-            return
-        finally:
-            db.close()
-        
-        # Criar arquivo Excel
-        try:
-            from openpyxl import Workbook
-            from openpyxl.styles import Font, PatternFill, Alignment
-            from openpyxl.utils import get_column_letter
-            import io
-            
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Relatório de Usuários e Pagamentos"
-            
-            # Cabeçalhos
-            headers = [
-                "ID do Usuário", "Username", "Nome", "Sobrenome", "Data de Cadastro",
-                "É VIP", "Total de Pagamentos", "Pagamentos Aprovados", "Pagamentos Pendentes",
-                "Pagamentos Rejeitados", "Valor Total Aprovado (R$)", "Valor Total Pendente (R$)",
-                "Planos Comprados", "Status dos Pagamentos", "Primeiro Pagamento", "Último Pagamento"
-            ]
-            
-            # Aplicar estilo aos cabeçalhos
-            header_font = Font(bold=True, color="FFFFFF")
-            header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
-            header_alignment = Alignment(horizontal="center", vertical="center")
-            
-            for col, header in enumerate(headers, 1):
-                cell = ws.cell(row=1, column=col, value=header)
-                cell.font = header_font
-                cell.fill = header_fill
-                cell.alignment = header_alignment
-            
-            # Preencher dados
-            for row, user in enumerate(users_data, 2):
-                ws.cell(row=row, column=1, value=user['user_id'])
-                ws.cell(row=row, column=2, value=f"@{user['username']}" if user['username'] else "Sem username")
-                ws.cell(row=row, column=3, value=user['first_name'] or "Sem nome")
-                ws.cell(row=row, column=4, value=user['last_name'] or "")
-                ws.cell(row=row, column=5, value=user['user_created'].strftime("%d/%m/%Y %H:%M") if user['user_created'] else "")
-                ws.cell(row=row, column=6, value="Sim" if user['is_vip'] else "Não")
-                ws.cell(row=row, column=7, value=user['total_payments'] or 0)
-                ws.cell(row=row, column=8, value=user['approved_payments'] or 0)
-                ws.cell(row=row, column=9, value=user['pending_payments'] or 0)
-                ws.cell(row=row, column=10, value=user['rejected_payments'] or 0)
-                ws.cell(row=row, column=11, value=float(user['total_approved_amount'] or 0))
-                ws.cell(row=row, column=12, value=float(user['total_pending_amount'] or 0))
-                ws.cell(row=row, column=13, value=user['purchased_plans'] or "Nenhum")
-                ws.cell(row=row, column=14, value=user['payment_statuses'] or "Nenhum")
-                ws.cell(row=row, column=15, value=user['first_payment_date'].strftime("%d/%m/%Y %H:%M") if user['first_payment_date'] else "")
-                ws.cell(row=row, column=16, value=user['last_payment_date'].strftime("%d/%m/%Y %H:%M") if user['last_payment_date'] else "")
-            
-            # Ajustar largura das colunas
-            for col in range(1, len(headers) + 1):
-                column_letter = get_column_letter(col)
-                ws.column_dimensions[column_letter].width = 20
-            
-            # Salvar em bytes
-            excel_buffer = io.BytesIO()
-            wb.save(excel_buffer)
-            excel_buffer.seek(0)
-            
-            # Enviar arquivo
-            filename = f"relatorio_usuarios_pagamentos_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-            
-            await query.message.reply_document(
-                document=excel_buffer,
-                filename=filename,
-                caption=f"📊 **Relatório Completo de Usuários e Pagamentos**\n\n"
-                       f"📅 Gerado em: {datetime.now().strftime('%d/%m/%Y às %H:%M')}\n"
-                       f"👥 Total de usuários: {len(users_data)}\n"
-                       f"💳 Total de pagamentos: {sum(user['total_payments'] or 0 for user in users_data)}\n"
-                       f"✅ Pagamentos aprovados: {sum(user['approved_payments'] or 0 for user in users_data)}\n"
-                       f"⏳ Pagamentos pendentes: {sum(user['pending_payments'] or 0 for user in users_data)}\n\n"
-                       f"📋 O arquivo contém informações detalhadas sobre todos os usuários e seus pagamentos.",
-                parse_mode='Markdown'
-            )
-            
-            # Atualizar mensagem com confirmação
-            keyboard = [[InlineKeyboardButton("⬅️ Voltar", callback_data="admin_suspicious_payments")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.message.edit_text(
-                "✅ **Relatório Excel gerado com sucesso!**\n\n"
-                "📊 O arquivo foi enviado com todas as informações dos usuários e pagamentos.\n"
-                "📋 Inclui dados como:\n"
-                "• Informações do usuário\n"
-                "• Quantidade de pagamentos por status\n"
-                "• Valores aprovados e pendentes\n"
-                "• Planos comprados\n"
-                "• Datas de pagamentos",
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
-            
-        except Exception as e:
-            logger.error(f"Erro ao gerar Excel: {e}")
-            await query.answer("❌ Erro ao gerar arquivo Excel", show_alert=True)
-            return
-        
-        return
 
     # Verificar se é um callback de broadcast
     if query.data == "admin_broadcast":
@@ -3756,7 +3427,6 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
             [InlineKeyboardButton("💎 Planos VIP", callback_data="admin_vip_plans")],
             [InlineKeyboardButton("📝 Mensagens", callback_data="admin_messages")],
             [InlineKeyboardButton("⏰ Agendar Mensagens", callback_data="admin_schedule_messages")],
-            [InlineKeyboardButton("🚨 Pagamentos Suspeitos", callback_data="admin_suspicious_payments")],
             [InlineKeyboardButton("🔄 Manutenção", callback_data="admin_maintenance")],
             [InlineKeyboardButton("👤 Gerenciar Admins", callback_data="admin_manage_admins")],
             [InlineKeyboardButton("⚒️ Suporte", url=config.get('support_admin', 'https://t.me/suporte'))]  # Botão de suporte
@@ -7077,7 +6747,7 @@ async def get_user_vip_links(bot, user_id):
             # Gerar links de convite para cada grupo
             links_message = f"⬇ ESTOU PELADINHA TE ESPERANDO 🙈\n\n"
             links_message += f"😈 Clique em \" VER CANAL \" pra gente começar a brincar 🔥\n\n"
-            links_message += f"💎 VIP DA EDUARDA 🍑🔥\n\n"
+            links_message += f"💎 VIP DA SOY ÁVILA 🍑🔥\n\n"
             links_message += f"📅 **Expira em:** {end_date.strftime('%d/%m/%Y %H:%M')}\n\n"
             links_message += f"📱 **Grupos VIP:**\n\n"
             
