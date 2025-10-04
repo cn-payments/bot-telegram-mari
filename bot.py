@@ -2957,7 +2957,7 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 try:
                     db2.connect()
                     user_info = db2.execute_fetch_one(
-                        "SELECT username, first_name FROM users WHERE user_id = %s",
+                        "SELECT username, first_name FROM users WHERE id = %s",
                         (user_id,)
                     )
                     plan_info = db2.execute_fetch_one(
@@ -2995,7 +2995,7 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 try:
                     db2.connect()
                     user_info = db2.execute_fetch_one(
-                        "SELECT username, first_name FROM users WHERE user_id = %s",
+                        "SELECT username, first_name FROM users WHERE id = %s",
                         (user_id,)
                     )
                 finally:
@@ -3027,7 +3027,7 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 try:
                     db2.connect()
                     user_info = db2.execute_fetch_one(
-                        "SELECT username, first_name FROM users WHERE user_id = %s",
+                        "SELECT username, first_name FROM users WHERE id = %s",
                         (user_id,)
                     )
                 finally:
@@ -3071,11 +3071,11 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
             # Buscar todos os usuários com seus dados de pagamento
             users_data = db.execute_fetch_all("""
                 SELECT 
-                    u.user_id,
+                    u.id as user_id,
                     u.username,
                     u.first_name,
                     u.last_name,
-                    u.created_at as user_created,
+                    u.joined_date as user_created,
                     u.is_vip,
                     COUNT(p.payment_id) as total_payments,
                     COUNT(CASE WHEN p.status = 'approved' THEN 1 END) as approved_payments,
@@ -3088,10 +3088,10 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     MIN(p.created_at) as first_payment_date,
                     MAX(p.created_at) as last_payment_date
                 FROM users u
-                LEFT JOIN payments p ON u.user_id = p.user_id
+                LEFT JOIN payments p ON u.id = p.user_id
                 LEFT JOIN vip_plans vp ON p.plan_id = vp.id
-                GROUP BY u.user_id, u.username, u.first_name, u.last_name, u.created_at, u.is_vip
-                ORDER BY u.created_at DESC
+                GROUP BY u.id, u.username, u.first_name, u.last_name, u.joined_date, u.is_vip
+                ORDER BY u.joined_date DESC
             """)
             
         except Exception as e:
