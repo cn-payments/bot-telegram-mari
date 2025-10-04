@@ -3047,7 +3047,10 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
         report_text += "\n\n📅 Período analisado: Últimos 30 dias\n"
         report_text += "⚠️ Este relatório identifica padrões suspeitos que podem indicar problemas ou fraudes."
         
-        keyboard = [[InlineKeyboardButton("⬅️ Voltar", callback_data="admin_back")]]
+        keyboard = [
+            [InlineKeyboardButton("📊 Gerar Excel Completo", callback_data="admin_generate_excel_report")],
+            [InlineKeyboardButton("⬅️ Voltar", callback_data="admin_back")]
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.message.edit_text(
@@ -3055,6 +3058,146 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
+        return
+    
+    # Handler para gerar relatório Excel completo
+    if query.data == "admin_generate_excel_report":
+        await query.answer("📊 Gerando relatório Excel...", show_alert=False)
+        
+        db = Database()
+        try:
+            db.connect()
+            
+            # Buscar todos os usuários com seus dados de pagamento
+            users_data = db.execute_fetch_all("""
+                SELECT 
+                    u.user_id,
+                    u.username,
+                    u.first_name,
+                    u.last_name,
+                    u.created_at as user_created,
+                    u.is_vip,
+                    COUNT(p.payment_id) as total_payments,
+                    COUNT(CASE WHEN p.status = 'approved' THEN 1 END) as approved_payments,
+                    COUNT(CASE WHEN p.status = 'pending' THEN 1 END) as pending_payments,
+                    COUNT(CASE WHEN p.status = 'rejected' THEN 1 END) as rejected_payments,
+                    SUM(CASE WHEN p.status = 'approved' THEN p.amount ELSE 0 END) as total_approved_amount,
+                    SUM(CASE WHEN p.status = 'pending' THEN p.amount ELSE 0 END) as total_pending_amount,
+                    GROUP_CONCAT(DISTINCT vp.name ORDER BY p.created_at DESC) as purchased_plans,
+                    GROUP_CONCAT(DISTINCT p.status ORDER BY p.created_at DESC) as payment_statuses,
+                    MIN(p.created_at) as first_payment_date,
+                    MAX(p.created_at) as last_payment_date
+                FROM users u
+                LEFT JOIN payments p ON u.user_id = p.user_id
+                LEFT JOIN vip_plans vp ON p.plan_id = vp.id
+                GROUP BY u.user_id, u.username, u.first_name, u.last_name, u.created_at, u.is_vip
+                ORDER BY u.created_at DESC
+            """)
+            
+        except Exception as e:
+            logger.error(f"Erro ao buscar dados para Excel: {e}")
+            await query.answer("❌ Erro ao gerar relatório", show_alert=True)
+            return
+        finally:
+            db.close()
+        
+        # Criar arquivo Excel
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill, Alignment
+            from openpyxl.utils import get_column_letter
+            import io
+            
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Relatório de Usuários e Pagamentos"
+            
+            # Cabeçalhos
+            headers = [
+                "ID do Usuário", "Username", "Nome", "Sobrenome", "Data de Cadastro",
+                "É VIP", "Total de Pagamentos", "Pagamentos Aprovados", "Pagamentos Pendentes",
+                "Pagamentos Rejeitados", "Valor Total Aprovado (R$)", "Valor Total Pendente (R$)",
+                "Planos Comprados", "Status dos Pagamentos", "Primeiro Pagamento", "Último Pagamento"
+            ]
+            
+            # Aplicar estilo aos cabeçalhos
+            header_font = Font(bold=True, color="FFFFFF")
+            header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+            header_alignment = Alignment(horizontal="center", vertical="center")
+            
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=1, column=col, value=header)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = header_alignment
+            
+            # Preencher dados
+            for row, user in enumerate(users_data, 2):
+                ws.cell(row=row, column=1, value=user['user_id'])
+                ws.cell(row=row, column=2, value=f"@{user['username']}" if user['username'] else "Sem username")
+                ws.cell(row=row, column=3, value=user['first_name'] or "Sem nome")
+                ws.cell(row=row, column=4, value=user['last_name'] or "")
+                ws.cell(row=row, column=5, value=user['user_created'].strftime("%d/%m/%Y %H:%M") if user['user_created'] else "")
+                ws.cell(row=row, column=6, value="Sim" if user['is_vip'] else "Não")
+                ws.cell(row=row, column=7, value=user['total_payments'] or 0)
+                ws.cell(row=row, column=8, value=user['approved_payments'] or 0)
+                ws.cell(row=row, column=9, value=user['pending_payments'] or 0)
+                ws.cell(row=row, column=10, value=user['rejected_payments'] or 0)
+                ws.cell(row=row, column=11, value=float(user['total_approved_amount'] or 0))
+                ws.cell(row=row, column=12, value=float(user['total_pending_amount'] or 0))
+                ws.cell(row=row, column=13, value=user['purchased_plans'] or "Nenhum")
+                ws.cell(row=row, column=14, value=user['payment_statuses'] or "Nenhum")
+                ws.cell(row=row, column=15, value=user['first_payment_date'].strftime("%d/%m/%Y %H:%M") if user['first_payment_date'] else "")
+                ws.cell(row=row, column=16, value=user['last_payment_date'].strftime("%d/%m/%Y %H:%M") if user['last_payment_date'] else "")
+            
+            # Ajustar largura das colunas
+            for col in range(1, len(headers) + 1):
+                column_letter = get_column_letter(col)
+                ws.column_dimensions[column_letter].width = 20
+            
+            # Salvar em bytes
+            excel_buffer = io.BytesIO()
+            wb.save(excel_buffer)
+            excel_buffer.seek(0)
+            
+            # Enviar arquivo
+            filename = f"relatorio_usuarios_pagamentos_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            
+            await query.message.reply_document(
+                document=excel_buffer,
+                filename=filename,
+                caption=f"📊 **Relatório Completo de Usuários e Pagamentos**\n\n"
+                       f"📅 Gerado em: {datetime.now().strftime('%d/%m/%Y às %H:%M')}\n"
+                       f"👥 Total de usuários: {len(users_data)}\n"
+                       f"💳 Total de pagamentos: {sum(user['total_payments'] or 0 for user in users_data)}\n"
+                       f"✅ Pagamentos aprovados: {sum(user['approved_payments'] or 0 for user in users_data)}\n"
+                       f"⏳ Pagamentos pendentes: {sum(user['pending_payments'] or 0 for user in users_data)}\n\n"
+                       f"📋 O arquivo contém informações detalhadas sobre todos os usuários e seus pagamentos.",
+                parse_mode='Markdown'
+            )
+            
+            # Atualizar mensagem com confirmação
+            keyboard = [[InlineKeyboardButton("⬅️ Voltar", callback_data="admin_suspicious_payments")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.message.edit_text(
+                "✅ **Relatório Excel gerado com sucesso!**\n\n"
+                "📊 O arquivo foi enviado com todas as informações dos usuários e pagamentos.\n"
+                "📋 Inclui dados como:\n"
+                "• Informações do usuário\n"
+                "• Quantidade de pagamentos por status\n"
+                "• Valores aprovados e pendentes\n"
+                "• Planos comprados\n"
+                "• Datas de pagamentos",
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+            
+        except Exception as e:
+            logger.error(f"Erro ao gerar Excel: {e}")
+            await query.answer("❌ Erro ao gerar arquivo Excel", show_alert=True)
+            return
+        
         return
 
     # Verificar se é um callback de broadcast
